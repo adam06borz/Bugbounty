@@ -1,2 +1,13 @@
-# Engagement-Artefakte: NIEMALS committen (Sektion 13.2)
-.artifacts/
+# Dieses Repo ist OEFFENTLICH und enthaelt ausschliesslich generalisierte Skills.
+#
+# Whitelist statt Blacklist: alles am Repo-Root ist standardmaessig
+# Engagement-Material (Artefakte, Belege, Zieldokumentation, PoCs) und bleibt
+# lokal. Nur die Skills werden versioniert.
+#
+# Bewusst so gebaut: eine Blacklist muesste jedes Ziel beim Namen nennen und
+# waere damit selbst eine oeffentliche Liste der bearbeiteten Ziele. Ausserdem
+# ist ein neues Engagement-Verzeichnis hier automatisch ignoriert, statt dass
+# jemand daran denken muss, es nachzutragen.
+/*
+!/.gitignore
+!/skills/
