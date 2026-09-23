@@ -326,3 +326,116 @@ When reviewing, count the decodes along the path and compare with the number of
 encodes. Mismatch is the bug. The structural fix is to decode exactly once, as
 early as possible, and to encode exactly once, as late as possible, at the point
 where the context is known.
+
+---
+
+## HTML-escaping into an attribute the client compiles as code
+
+The encoder mistakes above assume the attribute value stays an attribute value.
+This construction breaks that assumption: the value is HTML-escaped correctly,
+and is still injectable, because something on the client reads the attribute
+back and evaluates it as source code.
+
+**Construction.** A client-side binding library keeps its expressions in DOM
+attributes rather than in script blocks — the attribute body is a small
+JavaScript expression (an object literal, a method call, a property path). At
+bind time the library walks the DOM, reads those attributes with
+`getAttribute()`, concatenates the result into a function body, and compiles it
+with `new Function` / `eval`. The server, rendering that same attribute, wants
+to pass a runtime value into the expression, so it interpolates it into a
+quoted JS string inside the attribute — and applies the template engine's
+default escaping, which is HTML escaping.
+
+Rendered, that looks correct:
+
+```html
+<form data-bind="{ pref: new Pref(ctx, {value: &#39;USERVALUE&#39;}) }">
+```
+
+**Why the defense fails.** HTML escaping and the compile step are separated by
+a decode the developer never accounts for. `getAttribute()` returns the
+**HTML-decoded** value, so every `&#39;` becomes `'` — including the ones the
+attacker supplied. After decoding, the injected quote and the template's own
+delimiter are byte-identical and the parser cannot distinguish them:
+
+```js
+{ pref: new Pref(ctx, {value: 'USER'+payload+'VALUE'}) }
+```
+
+That string is then handed to `new Function`. HTML escaping has protected the
+HTML parser, which was never the consumer. The consumer is a JS parser, and the
+correct encoder for it is JSON serialization or JS-string escaping.
+
+This also sidesteps a nonce-based CSP entirely. Nothing injects a `<script>`
+element, so the nonce is never consulted; the code runs through the eval-family
+sink, which only `'unsafe-eval'` governs. A team that has correctly deployed a
+per-request nonce can still be fully exposed here.
+
+**Detection signal.**
+1. Grep the shipped bundle for `new Function(` together with `with(` — binding
+   libraries that build a scope object use that pair. A hit means DOM
+   attributes are a code path.
+2. Read the CSP: if `script-src` carries `'unsafe-eval'`, the sink is reachable.
+3. In the rendered DOM, look for attributes whose values are *expressions*
+   rather than data — an attribute containing `new `, `(`, `{` and a quoted
+   literal. Then ask which of those literals is a runtime value.
+4. Fastest confirmation: submit a value containing an apostrophe into any field
+   you can see rendered into such an attribute, then look at the **raw**
+   response. If your quote comes back as an entity *and so do the template's
+   own delimiters*, you have the construction.
+
+**Verification (offline, no requests to the target).** Once you have the raw
+attribute text from a single response, the rest is browser semantics and can be
+settled locally:
+
+```js
+const host = document.createElement('div');
+host.innerHTML = '<form data-bind="' + rawAttributeTextFromResponse + '"></form>';
+const decoded = host.querySelector('form').getAttribute('data-bind');
+// decoded now shows whether your quotes survived as real quotes
+new Function('ctx', 'with(ctx) { return ' + decoded + ' }');  // compiles or throws
+```
+
+If `getAttribute()` yields valid JS containing your expression and the compile
+succeeds, the mechanism is proven without further traffic. This matters when
+the target rate-limits: a 429 on a follow-up request looks exactly like "the
+payload did not execute", and will produce a false negative if you do not check
+the status code.
+
+**Counter-check.** Not this construction if any of these hold: the value is
+emitted with `JSON.stringify`-style encoding (quotes arrive as `'` or the
+literal is a JSON scalar); the attribute is read with `dataset` and used as
+data rather than concatenated into a compiled string; the library uses a real
+parser over the attribute rather than `new Function`; or the CSP omits
+`'unsafe-eval'` and the library has a CSP-safe mode.
+
+**Exploitability is a separate question — answer it before celebrating.** The
+construction proves the *encoder* is wrong. Whether a remote attacker can reach
+it depends on the delivery path, and the common outcome is that they cannot:
+
+- Does the tainted value arrive by GET? Then it is reflected XSS.
+- Does it persist and render for other viewers? Then it is stored XSS.
+- Does it only appear on a validation-error re-render of a state-changing POST?
+  Then delivery needs the victim's anti-CSRF token, and if that token is
+  session-bound the only reachable scenario is the user attacking themselves.
+
+That last case is extremely common, because the fields that fail validation
+hardest are exactly the ones re-rendered with the submitted value. Most
+programs classify it as self-XSS and reject it. Check whether a value that
+*passes* validation can also carry a quote — an allowlisted enum will not, a
+loose format regex might.
+
+**Remediation.** Encode for the context that actually consumes the value: the
+value is destined for a JS parser, so serialize it as JSON or apply JS-string
+escaping, not HTML escaping. Better, remove the dual-consumer problem — put
+runtime values in an ordinary data attribute read via `dataset` and keep
+expression attributes free of interpolation, so no attribute is both markup and
+source. Structurally, dropping `'unsafe-eval'` removes the escalation from any
+attribute injection on that origin.
+
+**Confidence: seen once.** One application — server-rendered templates plus an
+attribute-driven client binding library, under a per-request nonce CSP that also
+carried `'unsafe-eval'`. The *class* is not rare: any library that compiles DOM
+attributes with `new Function` has this shape, and several popular ones do. But
+this file has one observation behind it, not a survey. Treat the detection
+signal as reliable and the frequency as unknown.
