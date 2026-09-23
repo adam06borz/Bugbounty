@@ -221,3 +221,49 @@ Faster than black-box testing where source is available.
 9. **Check the login and logout flows** specifically; they are frequently
    exempted.
 10. **Check for token in URLs** anywhere in templates or redirect construction.
+
+---
+
+## Run the control in the same batch, or your rejections mean nothing
+
+The session-binding test — take a *valid* token from a second live session of
+your own and submit it into the first — is the highest-value single test in
+this file. It is also the easiest to run and misread.
+
+The failure mode is not subtle once stated: you fire three variants (foreign
+token, empty token, no token), get `403` three times, and record "token is
+session-bound". But a `403` proves only that *something* rejected the request.
+Anti-automation, a WAF rule, an expired token, a changed endpoint, a
+maintenance path and a genuine CSRF check all look identical from the outside.
+
+**Always include an accepted arm.** Same endpoint, same body, same batch, only
+the token differs:
+
+| arm | token | expected |
+|---|---|---|
+| control | your own current token | **accepted** (302/200) |
+| A | valid token from your *other* live session | rejected |
+| B | empty string | rejected |
+| C | omitted entirely | rejected |
+
+If the control does not come back accepted, you have measured nothing and the
+run is void — re-establish the session and repeat. A result set of
+`302 / 403 / 403 / 403` is evidence. A result set of `403 / 403 / 403 / 403` is
+a broken harness that looks like a strong defense.
+
+Two further habits that pay for themselves:
+
+- **Make the request a no-op.** Set the field you are submitting to the value
+  it already holds. A successful control then changes nothing, so the test is
+  safe to repeat and needs no cleanup entry. You still get the status code,
+  which is all the test is reading.
+- **Check the status before interpreting the body.** Rate limiting is the
+  quiet killer here. A `429` renders like "the payload did not reach the
+  template" and reads exactly like a defense holding. If a run turns negative
+  after several rapid requests, confirm the status code before concluding
+  anything, then slow down — the answer may be that you never tested it.
+
+Record the empty-token arm separately even when it rejects. Client code of the
+form `token = getToken() || ''` will send an empty string when the meta tag is
+missing, and whether the server treats empty as absent or as invalid is a real
+behavioural detail worth having written down.
