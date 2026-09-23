@@ -235,3 +235,66 @@ CORS and CSRF are different problems that interact:
 If you find reflected-origin CORS with credentials, report it as its own
 high-severity finding and note that it nullifies the CSRF token defense, rather
 than folding it into the CSRF report.
+
+---
+
+## The paired-cookie cross-site detector
+
+Observed once, on an authentication service that needed its session to survive
+legitimate cross-site top-level navigation. How widespread it is, this file
+does not know. Recorded because it is easy to walk past and because it changes
+which experiment is worth running.
+
+**What you see.** Two session cookies set in the same response, carrying
+**identical values**, differing only in delivery rules:
+
+```
+Set-Cookie: sess=<value>; Secure; HttpOnly; SameSite=None
+Set-Cookie: __Host-sess_same_site=<value>; Path=/; Secure; HttpOnly; SameSite=Lax
+```
+
+**What it is for.** The application needs the session to survive legitimate
+cross-site top-level flows, so the primary cookie must be `SameSite=None` — and
+that alone would hand every cross-site request an authenticated session. The
+Lax-scoped twin is the discriminator: the browser withholds it on cross-site
+requests, so the server can tell, from the cookie jar alone, whether a request
+originated same-site. The `__Host-` prefix stops a subdomain from writing a
+forged twin, which is what would otherwise defeat the whole scheme.
+
+**Detection signal.** Two `Set-Cookie` values that are byte-identical with
+different `SameSite` attributes, one carrying `__Host-`. Compare the values —
+the pairing is invisible if you only read the attributes. Check that they stay
+identical after authentication as well as before; a pair that only matches
+while anonymous is a different (and weaker) design.
+
+**Verification.** Do not reason about it — measure delivery. Host a minimal
+auto-submitting form locally (a `file://` page gives you `Origin: null`, which
+is also the sandboxed-iframe case worth covering) and inspect the **request**
+headers of the resulting cross-site POST:
+
+- Only the `SameSite=None` cookie present, twin absent → the mechanism works as
+  designed, and the server can detect cross-site.
+- Both present → the twin is not Lax-scoped in practice, and the detector is
+  decorative.
+
+Expect the server to treat such a request as unauthenticated and to issue a
+fresh session pair in the response. That is the correct behaviour, not a
+session-fixation bug — check that your real session is still intact afterwards
+rather than assuming either way.
+
+**What this means for your test plan.** Against this construction the classic
+token-stripping matrix will reject on the token long before the cookie
+mechanism is reached, so a plain `403` tells you nothing about which control
+fired. Isolate them: the token questions belong in a same-site request with the
+token varied; the SameSite question belongs in a cross-site request where you
+read the `Cookie` header that actually arrived. Two experiments, one variable
+each.
+
+**Counter-check.** Identical values across two cookies are not automatically
+this pattern — session mirroring for a legacy client, or a cookie copied for a
+subdomain, look similar. The tell is the `SameSite` asymmetry plus `__Host-`.
+
+**Remediation framing for a report.** If the twin turns out not to be checked
+on some endpoints, the finding is not "SameSite=None is unsafe" — it is that a
+deliberately built detector is enforced inconsistently. Name the endpoints that
+skip it; that is the actionable part.
