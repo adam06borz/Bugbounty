@@ -17,11 +17,24 @@ Die drei greifen ineinander: `web2-recon` liefert die Angriffsfläche, `bug-boun
 Als persönliche Skills (gelten in allen Projekten):
 
 ```bash
+BASE=https://raw.githubusercontent.com/adam06borz/Bugbounty/main/skills
+
 for s in bug-bounty web2-vuln-classes web2-recon; do
   mkdir -p ~/.claude/skills/$s
-  curl -sSL -o ~/.claude/skills/$s/SKILL.md \
-    https://raw.githubusercontent.com/adam06borz/Bugbounty/main/skills/$s/SKILL.md
+  curl -sSL -o ~/.claude/skills/$s/SKILL.md "$BASE/$s/SKILL.md"
 done
+
+# web2-recon hat eine Referenzdatei
+mkdir -p ~/.claude/skills/web2-recon/references
+curl -sSL -o ~/.claude/skills/web2-recon/references/windows-setup.md \
+  "$BASE/web2-recon/references/windows-setup.md"
+```
+
+Oder gleich das ganze Repo klonen, dann bleiben Referenzdateien automatisch dabei:
+
+```bash
+git clone --depth 1 https://github.com/adam06borz/Bugbounty.git /tmp/bb
+cp -r /tmp/bb/skills/* ~/.claude/skills/
 ```
 
 Oder projektbezogen: Datei nach `.claude/skills/<name>/SKILL.md` im Projekt legen.
