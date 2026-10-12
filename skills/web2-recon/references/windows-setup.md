@@ -153,12 +153,42 @@ gf -list   # alle anzeigen
 
 ---
 
+## Chaos (Step 1 der Pipeline) — geprüft, funktioniert nicht
+
+`CHAOS_API_KEY` ist als Windows-User-Variable gesetzt. Der Key ist **gültig**: er
+authentifiziert gegen `https://api.projectdiscovery.io/v1/user` (Plan `FREE`) und
+`/v1/scans`, beides mit Header `X-Api-Key`.
+
+Die Chaos-DNS-API lehnt denselben Key aber ab:
+
+```
+GET https://dns.projectdiscovery.io/dns/<domain>/subdomains
+-> 401 {"error":"unauthorized","message":"get access token here https://cloud.projectdiscovery.io"}
+```
+
+Geprüft über sechs Wege, alle 401: `curl` mit dem verbatim dokumentierten Request
+(`Authorization: <key>` + `Connection: close`), dieselbe Route mit `X-Api-Key`,
+`Authorization: Bearer <key>`, `X-PDCP-Key`, `subfinder -s chaos` und der offizielle
+`chaos`-Client v0.5.2 mit `-key`. Ein absichtlich falscher Key gibt dagegen 400 — der
+echte Key erreicht die Auth also und fällt dort durch. Alternative Endpoints unter
+`api.projectdiscovery.io` (`/v1/chaos/dns/...`, `/v1/dns/...`, `/v1/asset/dns/...`)
+antworten mit 404.
+
+Laut Doku ist der Chaos-Key derselbe wie der PDCP-Platform-Key, es gibt also keinen
+zweiten Key zum Nachtragen. Bleibt als Ursache: der `FREE`-Plan hat keinen Zugriff auf
+die DNS-API, oder das muss im Dashboard freigeschaltet werden. Nachzusehen unter
+[cloud.projectdiscovery.io/scans](https://cloud.projectdiscovery.io/scans).
+
+Deshalb steht in der subfinder-Config `chaos: []` — ein 401-Key dort erzeugt bei jedem
+Lauf eine Warnung, ohne Treffer zu liefern. **Step 1 der SKILL.md-Pipeline überspringen**,
+bis der Zugriff geklärt ist. Step 0 (crt.sh) und Step 2 (subfinder + assetfinder) tragen
+die Enumeration auch ohne Chaos.
+
 ## Was noch fehlt
 
-- **API-Keys.** `CHAOS_API_KEY` ist nicht gesetzt, und alle 40 subfinder-Quellen sind ohne Key.
-  Bis das nachgeholt ist, liefert Step 1 der Pipeline (Chaos) nichts und Step 2 (subfinder)
-  nur die schlüssellosen Quellen. Kostenlose Keys: chaos.projectdiscovery.io, virustotal.com,
-  securitytrails.com, censys.io, shodan.io.
+- **Weitere API-Keys.** Alle 40 subfinder-Quellen sind ohne Key, damit läuft Step 2 nur mit
+  den schlüssellosen Quellen. Kostenlose Keys: virustotal.com, securitytrails.com,
+  censys.io, shodan.io, github.com (PAT).
 - **Burp Suite.** Die SKILL.md verlangt in „Minutes 25-30" einen Proxy-Durchlauf. Nicht
   installiert.
 - **End-to-End-Test.** Die Tools sind einzeln geprüft (Resolve, HTTP-Request, Port-Scan auf
