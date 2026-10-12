@@ -7,6 +7,12 @@ description: Web2 recon pipeline — subdomain enumeration (subfinder, Chaos API
 
 Full asset discovery from nothing to a prioritized URL list ready for hunting.
 
+> **Auf Windows:** Die Befehle unten sind für Linux/macOS geschrieben. Das lokale Setup läuft
+> native unter Windows in Git Bash — venv-Pfade (`Scripts/` statt `bin/`), subfinder-Config,
+> Wordlist-Ersatz, Scheduled Tasks statt cron und drei Tool-Abweichungen stehen in
+> [`references/windows-setup.md`](references/windows-setup.md). Vor dem ersten Lauf dort
+> nachsehen, sonst zeigen mehrere Pfade ins Leere.
+
 ---
 
 ## SETUP (one-time)
